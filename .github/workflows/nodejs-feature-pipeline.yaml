@@ -32,7 +32,7 @@ jobs:
         run: npm install && npm test
 
       - name: Report Test Status to GitHub
-        uses: ramu-cloud-labs/actions/update-commit-status@main
+        uses: ramu-cloud-labs/workflows/.github/actions/update-commit-status@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           context: unit-tests
