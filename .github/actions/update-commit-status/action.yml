@@ -1,0 +1,36 @@
+name: Update GitHub Commit Status
+description: "Reusable tool to update the checkmark/X on a commit"
+
+inputs:
+  token:
+    description: "GitHub Token"
+    required: true
+  context:
+    description: "The name of the check (e.g., SonarQube)"
+    required: true
+  state:
+    description: "success, failure, pending, or error"
+    required: true
+  description:
+    description: "Short message"
+    required: false
+    default: "Status updated via Composite Action"
+
+runs:
+  using: composite
+  steps:
+    - name: Call GitHub API
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        STATE: ${{ inputs.state }}
+        CONTEXT: ${{ inputs.context }}
+        DESC: ${{ inputs.description }}
+      run: |
+        echo "Updating status for ${{ github.repository }} at ${{ github.sha }}..."
+        curl -sf \
+          -X POST \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          -d "{\"state\":\"$STATE\",\"context\":\"$CONTEXT\",\"description\":\"$DESC\"}" \
+          "https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }}"
