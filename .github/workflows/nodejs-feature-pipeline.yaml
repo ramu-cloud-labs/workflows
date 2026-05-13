@@ -1,47 +1,45 @@
 name: nodejs-feature-branch-workflow
 
 on:
-    workflow_call:
-        inputs:
-            project:
-                required: true
-                type: string
-            component:
-                required: true
-                type: string
+  workflow_call:
+    inputs:
+      project:
+        required: true
+        type: string
+      component:
+        required: true
+        type: string
 
 env:
-    project: ${{ inputs.project }}
-    component: ${{ inputs.component }}
-    acc_id: 717188664763
+  project: ${{ inputs.project }}
+  component: ${{ inputs.component }}
+  acc_id: 717188664763
 
 jobs:
-    trigger:
-        runs-on: self-hosted
-        steps:
-            - name: checkout code
-              uses: actions/checkout@v4
+  trigger:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-            - name: Extract App Version
-              run: |
-                  # Grabbing version from package.json
-                  VERSION=$(jq -r .version package.json)
-                  echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+      - name: Extract App Version
+        run: |
+          VERSION=$(jq -r .version package.json)
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
 
-            - name: Run Unit Tests
-              id: unit_tests
-              run: npm install && npm test
+      - name: Run Unit Tests
+        id: unit_tests
+        run: npm install && npm test
 
-            - name: Report Test Status to GitHub
-              # Uses your reusable composite action
-              uses: .github/actions/update-commit-status@main
-              with:
-                  token: ${{ secrets.GITHUB_TOKEN }}
-                  context: unit-tests
-                  state: ${{ steps.unit_tests.outcome }}
+      - name: Report Test Status to GitHub
+        uses: ramu-cloud-labs/actions/update-commit-status@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          context: unit-tests
+          state: ${{ steps.unit_tests.outcome }}
 
-            - name: Build and Scan Docker Image
-              run: |
-                  IMAGE_PATH=${acc_id}.dkr.ecr.us-east-1.amazonaws.com/${project}/${component}:${APP_VERSION}
-                  docker build -t $IMAGE_PATH .
-                  # Note: Trivy scan would follow here before pushing
+      - name: Build and Scan Docker Image
+        run: |
+          IMAGE_PATH=${acc_id}.dkr.ecr.us-east-1.amazonaws.com/${project}/${component}:${APP_VERSION}
+          docker build -t $IMAGE_PATH .
+          # Note: Trivy scan would follow here before pushing
