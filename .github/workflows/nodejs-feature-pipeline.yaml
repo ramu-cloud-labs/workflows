@@ -10,6 +10,8 @@ on:
         required: true
         type: string
 
+# ── Workflow-level env variables ──────────────────────────────
+# Store inputs as shell variables — accessible as $project, $component, $acc_id
 env:
   project: ${{ inputs.project }}
   component: ${{ inputs.component }}
@@ -20,30 +22,55 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      # ── BLOCK 1: Checkout ────────────────────────────────────
+      # Clones the caller repo code onto the runner machine
+      # Without this — runner has empty workspace, no files
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: read package.json version
+      # ── BLOCK 2: Read Version ────────────────────────────────
+      # jq reads package.json and extracts version field
+      # e.g. "version": "1.2.0" → APP_VERSION=1.2.0
+      # $GITHUB_ENV makes APP_VERSION available to ALL future steps
+      - name: Read package.json version
         id: package_version
         run: |
           APP_VERSION=$(jq -r .version package.json)
-          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
 
-      - name: install dependencies
+      # ── BLOCK 3: Sanity Check ────────────────────────────────
+      # Confirms version was read correctly — if empty, block 2 failed
+      - name: Check app version
+        run: echo "App version is → $APP_VERSION"
+
+      # ── BLOCK 4: Install Dependencies ───────────────────────
+      # Downloads all npm packages listed in package.json
+      # Same as: mvn install (Java) or pip install (Python)
+      - name: Install dependencies
         run: npm install
 
-      - name: unit test
+      # ── BLOCK 5: Unit Tests ──────────────────────────────────
+      # Runs developer-written test cases
+      # id: unit_tests → needed to read outcome in next step
+      - name: Unit test
         id: unit_tests
         run: npm test
 
-      - name: Update status — sonar-scan
+      # ── BLOCK 6: Post Unit Test Status on PR ─────────────────
+      # Posts ✅/❌ badge on the Pull Request page
+      # if: always() → post status even if unit tests failed
+      - name: Update status — unit-tests
+        if: always()
         uses: ramu-cloud-labs/workflows/.github/actions/update-commit-status@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           context: unit-tests
           state: ${{ steps.unit_tests.outcome }}
-          description: Unit tests ${{ steps.unit_tests.outcome  }}
+          description: Unit tests ${{ steps.unit_tests.outcome }}
 
+      # ── BLOCK 7: Library/Dependency Scan ─────────────────────
+      # Scans npm packages for known CVEs (security vulnerabilities)
+      # If CRITICAL or HIGH CVE found in node_modules → pipeline fails
       - name: Check Dependabot Alerts
         id: library_scan
         uses: Posture-Cybersecurity/dependabot-security-checker@v1.1.5
@@ -53,14 +80,19 @@ jobs:
           output-file: "security-report.csv"
           fail-on-alerts: "true"
 
+      # ── BLOCK 8: Post Library Scan Status on PR ──────────────
       - name: Update status — library-scan
+        if: always()
         uses: ramu-cloud-labs/workflows/.github/actions/update-commit-status@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           context: library-scan
           state: ${{ steps.library_scan.outcome }}
-          description: Unit tests ${{ steps.library_scan.outcome  }}
+          description: Library scan ${{ steps.library_scan.outcome }}
 
+      # ── BLOCK 9: AWS Login ───────────────────────────────────
+      # Sets up AWS CLI credentials on the runner
+      # Required before any AWS command (ECR login, push, etc.)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
@@ -68,16 +100,27 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      # ── BLOCK 10: ECR Login ──────────────────────────────────
+      # Authenticates Docker to push images to AWS ECR
+      # Runs: aws ecr get-login-password | docker login ... (automatically)
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: build image
+      # ── BLOCK 11: Docker Build ───────────────────────────────
+      # Builds Docker image using Dockerfile in the repo root
+      # Full ECR image tag: <acc_id>.dkr.ecr.us-east-1.amazonaws.com/<project>/<component>:<version>
+      # Example: 717188664763.dkr.ecr.us-east-1.amazonaws.com/roboshop/catalogue:1.2.0
+      - name: Build image
         id: build_image
         run: |
           docker build -t ${acc_id}.dkr.ecr.us-east-1.amazonaws.com/${project}/${component}:${APP_VERSION} .
 
-      - name: Trivy Scan
+      # ── BLOCK 12: Trivy Image Scan ───────────────────────────
+      # Scans the Docker image OS packages for CVEs
+      # Different from Dependabot — this scans Ubuntu/Alpine OS packages INSIDE container
+      # exit-code: 1 → if CRITICAL/HIGH CVE found → pipeline fails, image NOT pushed
+      - name: Trivy scan
         id: trivy_scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -88,17 +131,38 @@ jobs:
           exit-code: 1
           severity: "CRITICAL,HIGH"
 
-      - name: push image
+      # ── BLOCK 13: Post Trivy Scan Status on PR ───────────────
+      - name: Update status — trivy-scan
+        if: always()
+        uses: ramu-cloud-labs/workflows/.github/actions/update-commit-status@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          context: trivy-scan
+          state: ${{ steps.trivy_scan.outcome }}
+          description: Trivy scan ${{ steps.trivy_scan.outcome }}
+
+      # ── BLOCK 14: Push Image to ECR ──────────────────────────
+      # Only reaches here if ALL scans passed
+      # Pushes verified + scanned image to AWS ECR registry
+      - name: Push image
         id: push_image
         run: |
-          docker push  ${acc_id}.dkr.ecr.us-east-1.amazonaws.com/${project}/${component}:${APP_VERSION}
+          docker push ${acc_id}.dkr.ecr.us-east-1.amazonaws.com/${project}/${component}:${APP_VERSION}
+
+      # ── BLOCK 15: Post Push Image Status on PR ───────────────
       - name: Update status — push-image
+        if: always()
         uses: ramu-cloud-labs/workflows/.github/actions/update-commit-status@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           context: push-image
           state: ${{ steps.push_image.outcome }}
-          description: push image ${{ steps.push_image.outcome }}
+          description: Push image ${{ steps.push_image.outcome }}
+
+      # ── BLOCK 16: Slack Notification ─────────────────────────
+      # if: always() → sends notification whether pipeline passed OR failed
+      # Ternary: job.status == 'success' && '✅ emoji' || '❌ emoji'
+      # Slack message includes: project/component, branch, commit, link to run
       - name: Slack alert
         if: always()
         uses: slackapi/slack-github-action@v3.0.3
