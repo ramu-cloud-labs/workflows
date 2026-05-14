@@ -10,10 +10,6 @@ on:
         required: true
         type: string
 
-permissions:
-  statuses: write
-  contents: read
-
 env:
   project: ${{ inputs.project }}
   component: ${{ inputs.component }}
@@ -27,23 +23,92 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Extract App Version
+      - name: read package.json version
+        id: package_version
         run: |
-          VERSION=$(jq -r .version package.json)
+          APP_VERSION=$(jq -r .version package.json)
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
 
-      - name: Run Unit Tests
-        id: unit_tests
-        run: npm install && npm test
+      - name: install dependencies
+        run: npm install
 
-      - name: Report Test Status to GitHub
+      - name: unit test
+        id: unit_tests
+        run: npm test
+
+      - name: Update status — sonar-scan
         uses: ramu-cloud-labs/workflows/.github/actions/update-commit-status@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           context: unit-tests
           state: ${{ steps.unit_tests.outcome }}
+          description: Unit tests ${{ steps.unit_tests.outcome  }}
 
-      - name: Build Docker Image
+      - name: Check Dependabot Alerts
+        id: library_scan
+        uses: Posture-Cybersecurity/dependabot-security-checker@v1.1.5
+        with:
+          github-token: ${{ secrets.DEPENDABOT_TOKEN }}
+          severities: "critical,high"
+          output-file: "security-report.csv"
+          fail-on-alerts: "true"
+
+      - name: Update status — library-scan
+        uses: ramu-cloud-labs/workflows/.github/actions/update-commit-status@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          context: library-scan
+          state: ${{ steps.library_scan.outcome }}
+          description: Unit tests ${{ steps.library_scan.outcome  }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: build image
+        id: build_image
         run: |
-          IMAGE_PATH=${acc_id}.dkr.ecr.us-east-1.amazonaws.com/${project}/${component}:${APP_VERSION}
-          docker build -t $IMAGE_PATH .
+          docker build -t ${acc_id}.dkr.ecr.us-east-1.amazonaws.com/${project}/${component}:${APP_VERSION} .
+
+      - name: Trivy Scan
+        id: trivy_scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.acc_id }}.dkr.ecr.us-east-1.amazonaws.com/${{ env.project }}/${{ env.component }}:${{ env.APP_VERSION }}
+          scan-type: "image"
+          vuln-type: os
+          format: "table"
+          exit-code: 1
+          severity: "CRITICAL,HIGH"
+
+      - name: push image
+        id: push_image
+        run: |
+          docker push  ${acc_id}.dkr.ecr.us-east-1.amazonaws.com/${project}/${component}:${APP_VERSION}
+      - name: Update status — push-image
+        uses: ramu-cloud-labs/workflows/.github/actions/update-commit-status@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          context: push-image
+          state: ${{ steps.push_image.outcome }}
+          description: push image ${{ steps.push_image.outcome }}
+      - name: Slack alert
+        if: always()
+        uses: slackapi/slack-github-action@v3.0.3
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: "${{ job.status == 'success' && ':white_check_mark:' || ':x:' }} *${{ inputs.project }}/${{ inputs.component }}* feature pipeline *${{ job.status }}*"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "${{ job.status == 'success' && ':white_check_mark:' || ':x:' }} *${{ inputs.project }}/${{ inputs.component }}* feature pipeline: *${{ job.status }}*\n*Branch:* `${{ github.ref_name }}`\n*Commit:* `${{ github.sha }}`\n*<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>*"
