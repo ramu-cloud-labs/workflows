@@ -1,36 +1,36 @@
 name: Update GitHub Commit Status
-description: "Reusable tool to update the checkmark/X on a commit"
-
+description: Posts a commit status check to GitHub — mirrors utils.updateCommitStatus() from Jenkins shared library
 inputs:
   token:
-    description: "GitHub Token"
+    description: GitHub token
     required: true
   context:
-    description: "The name of the check (e.g., SonarQube)"
+    description: Status context name shown as check label (e.g. unit-tests, sonar-scan)
     required: true
   state:
-    description: "success, failure, pending, or error"
+    description: success | failure | pending | error
     required: true
   description:
-    description: "Short message"
+    description: Short message shown in GitHub UI (max 140 chars)
     required: false
-    default: "Status updated via Composite Action"
-
+    default: ""
 runs:
   using: composite
   steps:
-    - name: Call GitHub API
-      shell: bash
+    - shell: bash
       env:
         TOKEN: ${{ inputs.token }}
         STATE: ${{ inputs.state }}
         CONTEXT: ${{ inputs.context }}
-        DESC: ${{ inputs.description }}
+        DESCRIPTION: ${{ inputs.description }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
       run: |
-        echo "Updating status for ${{ github.repository }} at ${{ github.sha }}..."
         curl -sf \
           -X POST \
           -H "Authorization: Bearer $TOKEN" \
           -H "Accept: application/vnd.github+json" \
-          -d "{\"state\":\"$STATE\",\"context\":\"$CONTEXT\",\"description\":\"$DESC\"}" \
-          "https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }}"
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -H "Content-Type: application/json" \
+          -d "{\"state\":\"$STATE\",\"context\":\"$CONTEXT\",\"description\":\"$DESCRIPTION\"}" \
+          "https://api.github.com/repos/$REPO/statuses/$SHA"
