@@ -1,0 +1,23 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../../../catalogue-units"
+		},
+		{
+			"path": "../../../terraform-aws-eks-production"
+		},
+		{
+			"path": "../../../nexastack-app"
+		},
+		{
+			"path": "../../../roboshop-docker-platform"
+		},
+		{
+			"path": "../../../azure-repo/catalogue-units"
+		}
+	],
+	"settings": {}
+}
